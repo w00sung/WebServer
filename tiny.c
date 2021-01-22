@@ -294,3 +294,44 @@ void get_filetype(char *filename, char *filetype)
     else
         strcpy(filetype, "text/plain");
 }
+
+void serve_dynamic(int fd, char *filename, char *cgiargs)
+{
+    char buf[MAXLINE], *emptylist[] = {NULL};
+
+    /* Return First( 성공 + 서버 정보 ) part of HTTP Response */
+    sprintf(buf, "HTTP/1.0 200 OK\r\n");
+    Rio_writen(fd, buf, strlen(buf));
+    sprintf(buf, "Server: Tiny Web Server\r\n");
+    Rio_writen(fd, buf, strlen(buf));
+
+    if (Fork() == 0)
+    {
+        setenv("QUERY_STRING", cgiargs, 1);
+        Dup2(fd, STDOUT_FILENO);
+        Execve(filename, emptylist, environ);
+    }
+    /* 
+        Fork() 
+            - 자식 프로세스 생성
+        setenv("QUERY_STRING", cgiargs, 1)
+
+            - 환경변수 세팅
+            - cgiargs에 CGI 파일이 run time 중에 접근할 수 있게 세팅!
+        
+        Dup2(fd, STDOUT_FILENO)
+
+            - 자식 프로세스에서 standard output을 
+                    연결된 file descriptor(fd)로 redirect 시킨다.
+        
+        Execve(filename, emptylist, environ)
+            - CGI프로그램을 호출 시켜서 실행시킨다.
+
+            - environ : 얘네는 자식단에서 실행시켰기 때문에
+                        열린 파일들과, 환경변수들에 동일한 접근성을 갖는다.
+
+    */
+
+    /* 자식이 terminate하면 reap the child 하려고 기다린다.*/
+    Wait(NULL);
+}
