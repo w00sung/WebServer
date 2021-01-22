@@ -98,11 +98,59 @@ void doit(int fd)
     printf("Request headers : \n");
     printf("%s", buf);
     sscanf(buf, "%s %s %s", method, uri, version);
+    // GET method 인지 check
     if (strcasecmp(method, "GET"))
     {
         // GET method 이외의 요청은 거부한다!
         clienterror(fd, method, "501", "Not implemented",
                     "Tiny does not implement this method");
         return;
+    }
+
+    // GET이면 이어서 Request Headers 이어서 읽기
+    read_requesthdrs(&rio);
+
+    /* URI((== filename + optional argument)를 
+                        parse(쪼개고 분석) from GET request*/
+
+    // flag : 너 static 이냐 dynamic이냐? -> uri를 parse하면 된다.
+    is_static = parse_uri(uri, filename, cgiargs); // 여기서 버퍼를 채우나?
+
+    // exist in Disk ?
+    if (stat(filename, &sbuf) < 0)
+    {
+        clienterror(fd, filename, "404", "Not found",
+                    "Tiny couldn't find this file");
+        return;
+    }
+
+    // for Static contents
+    if (is_static)
+    {
+        /* is Regularfile?       ||     has read Permission?    */
+        if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode))
+        {
+            // 해당 파일이 없어요
+            clienterror(fd, filename, "403", "Not found",
+                        "Tiny couldn't read this file");
+            return;
+        }
+        // 조건 충족시 serve(나른다 client로)
+        serve_static(fd, filename, sbuf.st_size);
+    }
+
+    // for Dynamic contents
+    else
+    {
+        /* is Regularfile?       ||      is Excutable?    */
+        if (!(S_ISREG(sbuf.st_mode)) || !(S_IXUSR & sbuf.st_mode))
+        {
+            clienterror(fd, filename, "403", "Forbidden",
+                        "Tiny couldn't run the CGI program");
+            return;
+        }
+
+        // 조건 충족시 serve
+        serve_dynamic(fd, filename, cgiargs);
     }
 }
