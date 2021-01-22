@@ -97,6 +97,7 @@ void doit(int fd)
     Rio_readlineb(&rio, buf, MAXLINE);
     printf("Request headers : \n");
     printf("%s", buf);
+    // 여기서 uri 입력받음
     sscanf(buf, "%s %s %s", method, uri, version);
     // GET method 인지 check
     if (strcasecmp(method, "GET"))
@@ -194,4 +195,52 @@ void read_requesthdrs(rio_t *rp)
         printf("%s", buf);
     }
     return;
+}
+
+int parse_uri(char *uri, char *filename, char *cgiargs)
+{
+    /*  is_static = parse_uri(uri, filename, cgiargs); 에서 스임 */
+    /* uri는 입력받은 상태 */
+    char *ptr;
+
+    /* INCLUDING "cgi-bin" : STATIC!*/
+    if (!strstr(uri, "cgi-bin"))
+    {
+        // static 이니까 CGI argu clear
+        strcpy(cgiargs, "");
+
+        // filename -> .\0~~~
+
+        /* cpy는 문자열의 \0 까지 복사한다. */
+        strcpy(filename, ".");
+        /* cat은 \0부터 append를 시작한다. 끝에 \0을 포함하면서! */
+        strcat(filename, uri);
+
+        // 만약 끝이 / 였으면? : /home.html 로 바꿔줄거임
+        if (uri[strlen(uri) - 1] == '/')
+            strcat(filename, "home.html");
+
+        return 1;
+    }
+
+    /* NOT including "cgi-bin" : DYNAMIC!*/
+    else
+    {
+        // ? 있는 곳으로 찾아간다.
+        ptr = index(uri, '?');
+        if (ptr)
+        {
+            // cgiargs에 ptr+1 이후 문자열을 복사시킨다.
+            strcpy(cgiargs, ptr + 1);
+            // uri에서 ? 대신끝에 '\0'
+            // 넣어줌으로써 앞에서부터 출력시 끊기게 만든다.(not sure)
+            *ptr = '\0';
+        }
+        else
+            strcpy(cgiargs, "");
+
+        strcpy(filename, ".");
+        strcat(filename, uri);
+        return 0;
+    }
 }
