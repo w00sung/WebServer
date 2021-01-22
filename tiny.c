@@ -244,3 +244,53 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
         return 0;
     }
 }
+
+void serve_static(int fd, char *filename, int filesize)
+{
+    int srcfd;
+    char *srcp, filetype[MAXLINE], buf[MAXBUF];
+
+    /* response header를 client에게 보낸다. */
+
+    get_filetype(filename, filetype);
+    sprintf(buf, "HTTP/1.0 200 OK\r\n");
+    sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
+    sprintf(buf, "%sConnection: close\r\n", buf);
+    sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
+    sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
+    Rio_writen(fd, buf, strlen(buf));
+    printf("Response headers:\n");
+    printf("%s", buf);
+
+    /* response body를 client에게 보낸다. */
+
+    // Read-Only 영역 : open 시켜놓고 descriptor 얻어오기
+    srcfd = Open(filename, O_RDONLY, 0);
+    srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+    /*
+     srcfd : 이 파일의 첫 filesize byte를 
+            READ-ONLY 가상 메모리 영역에 mapping
+     srcp : READ-ONLY 가상메모리 영역의 시작주소
+     */
+    Close(srcfd);
+
+    // 이제 srcp의 filesize만큼은 mapping 되어 있으니 fd에 복사한다.
+    Rio_writen(fd, srcp, filesize);
+    // 매핑된 가상메모리 주소 반환
+    Munmap(srcp, filesize);
+}
+
+/* Tiny Web Server에서 filetype은 5개 중 1개다.*/
+void get_filetype(char *filename, char *filetype)
+{
+    if (strstr(filename, ".html"))
+        strcpy(filetype, "text/html");
+    else if (strstr(filename, ".gif"))
+        strcpy(filetype, "image/gif");
+    else if (strstr(filename, ".png"))
+        strcpy(filetype, "image/png");
+    else if (strstr(filename, ".jpg"))
+        strcpy(filetype, "image/jpeg");
+    else
+        strcpy(filetype, "text/plain");
+}
