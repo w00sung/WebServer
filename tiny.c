@@ -3,9 +3,9 @@
 void doit(int fd);
 void read_requesthdrs(rio_t *rp);
 int parse_uri(char *uri, char *filename, char *cgiargs);
-void serve_static(int fd, char *filename, int filesize);
+void serve_static(int fd, char *filename, int filesize, int is_head);
 void get_filetype(char *filename, char *filetype);
-void serve_dynamic(int fd, char *filename, char *cgiargs);
+void serve_dynamic(int fd, char *filename, char *cgiargs, int is_head);
 void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longmsg);
 
 int main(int argc, char **argv)
@@ -16,13 +16,14 @@ int main(int argc, char **argv)
     socklen_t clientlen;
     struct sockaddr_storage clientaddr;
 
-    /* command-line argument 체크 */
+    /* command-line argument port를 추가해줘 !체크 */
     if (argc != 2)
     {
         fprintf(stderr, "usage: %s <port>\n", argv[0]);
         exit(1);
     }
 
+    // Port를 받아서 진행
     listenfd = Open_listenfd(argv[1]);
     /* lisetning file descriptor
         - Open_listenfd : Getaddrinfo(NULL, port, &hints, &listp) 
@@ -55,27 +56,34 @@ int main(int argc, char **argv)
     while (1)
     {
         clientlen = sizeof(clientaddr);
-
+        printf("I'm Here1\n");
+        // 여기서 기다린다.!!!
         connfd = Accept(listenfd, (SA *)&clientaddr, &clientlen);
         /*connection file descriptor 
             - Accept : OPEN + establish connect + return
                 (listenfd에 clientaddr를 가지고, clientlen을 가진
-                                                클라이언트의 요청 기다림)
+                                                클라이언트(listenfd를 통해 얻어올 수 있음)의 요청 기다림)
                 (SA*) : "Generic" socket address structure (긁어오는 hold 용도)
                             server addr인지, client addr인지 모르니 (?) - 확인필요
         */
+        printf("I'm Here2\n");
 
         Getnameinfo((SA *)&clientaddr, clientlen,
                     hostname, MAXLINE, port, MAXLINE, 0);
         /* 
+
                 소켓 주소 구조체에 대응되는
                 호스트와 서비스 이름을 hostname, port(-> 둘다 버퍼임) 버퍼에 채운다. 
             */
+        printf("I'm Here3\n");
 
         printf("Accepted connection from (%s %s)\n", hostname, port);
         /* 채워진 버퍼를 출력 */
         doit(connfd);
+        printf("I'm Here4\n");
+
         Close(connfd);
+        printf("I'm Here5\n");
     }
 
     return 0;
@@ -83,7 +91,8 @@ int main(int argc, char **argv)
 
 void doit(int fd)
 {
-    int is_static;
+    int is_static = 0;
+    int is_head;
     struct stat sbuf;
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     char filename[MAXLINE], cgiargs[MAXLINE];
@@ -93,14 +102,19 @@ void doit(int fd)
                         & 
       Request Headers(header-name : header-data) 
     */
+
+    // 버퍼 초기화
     Rio_readinitb(&rio, fd);
+
     Rio_readlineb(&rio, buf, MAXLINE);
     printf("Request headers : \n");
     printf("%s", buf);
     // 여기서 uri 입력받음
     sscanf(buf, "%s %s %s", method, uri, version);
-    // GET method 인지 check
-    if (strcasecmp(method, "GET"))
+    // buf -> %s %s %s -> method, uri, version
+
+    // GET method 인지 (strcasecmp : 대소문자 구분 X)check
+    if (strcasecmp(method, "GET") && strcasecmp(method, "HEAD"))
     {
         // GET method 이외의 요청은 거부한다!
         clienterror(fd, method, "501", "Not implemented",
@@ -111,9 +125,11 @@ void doit(int fd)
     // GET이면 이어서 Request Headers 이어서 읽기
     read_requesthdrs(&rio);
 
+    // head면 1 return
+    is_head = !strcasecmp(method, "HEAD");
+
     /* URI((== filename + optional argument)를 
                         parse(쪼개고 분석) from GET request*/
-
     // flag : 너 static 이냐 dynamic이냐? -> uri를 parse하면 된다.
     is_static = parse_uri(uri, filename, cgiargs); // 여기서 버퍼를 채우나?
 
@@ -131,13 +147,13 @@ void doit(int fd)
         /* is Regularfile?       ||     has read Permission?    */
         if (!(S_ISREG(sbuf.st_mode)) || !(S_IRUSR & sbuf.st_mode))
         {
-            // 해당 파일이 없어요
-            clienterror(fd, filename, "403", "Not found",
+            // 해당 파일을 다룰 수 없어요
+            clienterror(fd, filename, "403", "Forbidden",
                         "Tiny couldn't read this file");
             return;
         }
         // 조건 충족시 serve(나른다 client로)
-        serve_static(fd, filename, sbuf.st_size);
+        serve_static(fd, filename, sbuf.st_size, is_head);
     }
 
     // for Dynamic contents
@@ -152,7 +168,7 @@ void doit(int fd)
         }
 
         // 조건 충족시 serve
-        serve_dynamic(fd, filename, cgiargs);
+        serve_dynamic(fd, filename, cgiargs, is_head);
     }
 }
 
@@ -186,7 +202,10 @@ void read_requesthdrs(rio_t *rp)
 {
     char buf[MAXLINE];
 
+    // 두번째 header를 버리는 용도
+    // 얘는 host의 정보를 출력하지 않음!!!
     Rio_readlineb(rp, buf, MAXLINE);
+
     // 문자열 비교 : 버퍼에 EOF가 올때까지 진행
     while (strcmp(buf, "\r\n"))
     {
@@ -204,6 +223,9 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
     char *ptr;
 
     /* INCLUDING "cgi-bin" : STATIC!*/
+
+    // uri는 /를 동반하고 들어온다.
+    // ex) 14.100.123.42/video.mp4
     if (!strstr(uri, "cgi-bin"))
     {
         // static 이니까 CGI argu clear
@@ -234,6 +256,8 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
             strcpy(cgiargs, ptr + 1);
             // uri에서 ? 대신끝에 '\0'
             // 넣어줌으로써 앞에서부터 출력시 끊기게 만든다.(not sure)
+
+            // ***uri 복사값으로 쓸건데, end point 지정**
             *ptr = '\0';
         }
         else
@@ -244,8 +268,10 @@ int parse_uri(char *uri, char *filename, char *cgiargs)
         return 0;
     }
 }
+// Response Header 정보만 보내준다. (not body)
 
-void serve_static(int fd, char *filename, int filesize)
+// filesize는 stat구조체에서 얻어옴
+void serve_static(int fd, char *filename, int filesize, int is_head)
 {
     int srcfd;
     char *srcp, filetype[MAXLINE], buf[MAXBUF];
@@ -255,6 +281,7 @@ void serve_static(int fd, char *filename, int filesize)
     get_filetype(filename, filetype);
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
     sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
+    // %s해서 계속 하는추가해서 덮어쓰기의 느낌
     sprintf(buf, "%sConnection: close\r\n", buf);
     sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
     sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
@@ -262,15 +289,19 @@ void serve_static(int fd, char *filename, int filesize)
     printf("Response headers:\n");
     printf("%s", buf);
 
+    if (is_head)
+        return;
     /* response body를 client에게 보낸다. */
-
     // Read-Only 영역 : open 시켜놓고 descriptor 얻어오기
+
     srcfd = Open(filename, O_RDONLY, 0);
     srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
     /*
      srcfd : 이 파일의 첫 filesize byte를 
             READ-ONLY 가상 메모리 영역에 mapping
+
      srcp : READ-ONLY 가상메모리 영역의 시작주소
+
      */
     Close(srcfd);
 
@@ -291,12 +322,15 @@ void get_filetype(char *filename, char *filetype)
         strcpy(filetype, "image/png");
     else if (strstr(filename, ".jpg"))
         strcpy(filetype, "image/jpeg");
+    else if (strstr(filename, ".mp4"))
+        strcpy(filetype, "video/mp4");
     else
         strcpy(filetype, "text/plain");
 }
 
-void serve_dynamic(int fd, char *filename, char *cgiargs)
+void serve_dynamic(int fd, char *filename, char *cgiargs, int is_head)
 {
+    //끝을 구분하기 위해서 NULL 삽입
     char buf[MAXLINE], *emptylist[] = {NULL};
 
     /* Return First( 성공 + 서버 정보 ) part of HTTP Response */
@@ -304,11 +338,18 @@ void serve_dynamic(int fd, char *filename, char *cgiargs)
     Rio_writen(fd, buf, strlen(buf));
     sprintf(buf, "Server: Tiny Web Server\r\n");
     Rio_writen(fd, buf, strlen(buf));
+    if (is_head)
+    {
+        sprintf(buf, "Connection: close\r\n");
+        Rio_writen(fd, buf, strlen(buf));
+        return;
+    }
 
     if (Fork() == 0)
     {
         setenv("QUERY_STRING", cgiargs, 1);
         Dup2(fd, STDOUT_FILENO);
+        // 메모리 관점 접근
         Execve(filename, emptylist, environ);
     }
     /* 
