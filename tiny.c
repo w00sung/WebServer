@@ -345,8 +345,16 @@ void serve_dynamic(int fd, char *filename, char *cgiargs, int is_head)
         return;
     }
 
+    /* 
+    
+    부모 프로세스는 Fork의 리턴값이 0 이 아니기 때문에 
+    block에 들어올 수 없다.
+    자식도 "복사된" : cgiargs를 이용할 수 있다. 인자들을 갖고있다.
+
+    */
     if (Fork() == 0)
     {
+        // OS level에 설정하는 환경변수에 cgiargs를 넣는다.
         setenv("QUERY_STRING", cgiargs, 1);
         Dup2(fd, STDOUT_FILENO);
         // 메모리 관점 접근
@@ -358,6 +366,7 @@ void serve_dynamic(int fd, char *filename, char *cgiargs, int is_head)
         setenv("QUERY_STRING", cgiargs, 1)
 
             - 환경변수 세팅
+            - **이 환경변수는 OS level에서 설정된다.**
             - cgiargs에 CGI 파일이 run time 중에 접근할 수 있게 세팅!
         
         Dup2(fd, STDOUT_FILENO)
