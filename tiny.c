@@ -1,7 +1,7 @@
 #include "csapp.h"
 
 void doit(int fd);
-void read_requesthdrs(rio_t *rp, int echofd);
+void read_requesthdrs(rio_t *rp, int echofd, int *content_length);
 int parse_uri(char *uri, char *filename, char *cgiargs);
 void serve_static(int fd, char *filename, int filesize, int is_head);
 void get_filetype(char *filename, char *filetype);
@@ -93,6 +93,7 @@ void doit(int fd)
 {
     int is_static = 0;
     int is_head;
+    int content_length = 0;
     struct stat sbuf;
     char buf[MAXLINE], method[MAXLINE], uri[MAXLINE], version[MAXLINE];
     char filename[MAXLINE], cgiargs[MAXLINE];
@@ -108,9 +109,7 @@ void doit(int fd)
 
     // 버퍼 초기화, rio에 fd를 연결시켜놨음
     Rio_readinitb(&rio, fd);
-
     Rio_readlineb(&rio, buf, MAXLINE);
-
     /* Echo
     Rio_writen(fd,buf,strlen(buf));
     
@@ -124,10 +123,10 @@ void doit(int fd)
     printf("%s", buf);
     // 여기서 uri 입력받음
     sscanf(buf, "%s %s %s", method, uri, version);
-    // buf -> %s %s %s -> method, uri, version
+    // buf(에 받아서) -> %s %s %s -> method, uri, version(로 인자 분리)
 
     // GET method 인지 (strcasecmp : 대소문자 구분 X)check
-    if (strcasecmp(method, "GET") && strcasecmp(method, "HEAD"))
+    if (strcasecmp(method, "GET") && strcasecmp(method, "HEAD") && strcasecmp(method, "POST"))
     {
         // GET method 이외의 요청은 거부한다!
         clienterror(fd, method, "501", "Not implemented",
@@ -135,8 +134,8 @@ void doit(int fd)
         return;
     }
 
-    // GET이면 이어서 Request Headers 이어서 읽기
-    read_requesthdrs(&rio, echofd);
+    // HEAD가 아니면 이어서 Request Headers 이어서 읽기
+    read_requesthdrs(&rio, echofd, &content_length);
     Close(echofd);
 
     // head면 1 return
@@ -153,6 +152,13 @@ void doit(int fd)
         clienterror(fd, filename, "404", "Not found",
                     "Tiny couldn't find this file");
         return;
+    }
+
+    // POST라면, 이제 content-Length 만큼 cgiargs를 읽어야 한다.
+    if (!strcasecmp(method, "POST"))
+    {
+        // cgiargs에 cgiargs 담기 , content_length : 마지막에 '\0'을 추가해준다.
+        Rio_readlineb(&rio, cgiargs, content_length + 1);
     }
 
     // for Static contents
@@ -212,7 +218,7 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
     Rio_writen(fd, body, strlen(body));
 }
 
-void read_requesthdrs(rio_t *rp, int echofd)
+void read_requesthdrs(rio_t *rp, int echofd, int *content_length)
 {
     char buf[MAXLINE];
 
@@ -227,6 +233,14 @@ void read_requesthdrs(rio_t *rp, int echofd)
         // 읽고 무시한다.
         Rio_readlineb(rp, buf, MAXLINE);
         Rio_writen(echofd, buf, strlen(buf));
+        if (strstr(buf, "Content-Length"))
+        {
+            // content-length 있는 위치에 ptr 위치
+            char *ptr = index(buf, ':');
+            ptr += 2;
+            //atoi(str) : '\0' 까지 훑는다!!!!!
+            *content_length = atoi(ptr);
+        }
 
         printf("%s", buf);
     }
