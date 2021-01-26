@@ -1,7 +1,7 @@
 #include "csapp.h"
 
 void doit(int fd);
-void read_requesthdrs(rio_t *rp);
+void read_requesthdrs(rio_t *rp, int echofd);
 int parse_uri(char *uri, char *filename, char *cgiargs);
 void serve_static(int fd, char *filename, int filesize, int is_head);
 void get_filetype(char *filename, char *filetype);
@@ -98,16 +98,29 @@ void doit(int fd)
     char filename[MAXLINE], cgiargs[MAXLINE];
     rio_t rio;
 
+    int echofd;
+    echofd = Open("new_file.txt", O_RDWR | O_CREAT | O_TRUNC, S_IRWXU | S_IRGRP | S_IROTH);
+
     /* Request Line(method +URI + version ) 
                         & 
       Request Headers(header-name : header-data) 
     */
 
-    // 버퍼 초기화
+    // 버퍼 초기화, rio에 fd를 연결시켜놨음
     Rio_readinitb(&rio, fd);
 
     Rio_readlineb(&rio, buf, MAXLINE);
+
+    /* Echo
+    Rio_writen(fd,buf,strlen(buf));
+    
+    Rio_writen : 클라이언트에서 철력기능이 있는 것이아니다.
+                Telnet의 경우는 출력이 자동으로 되는거임
+    */
+    Rio_writen(echofd, buf, strlen(buf));
+
     printf("Request headers : \n");
+    Rio_writen(echofd, "Request headers : \n", strlen("Request headers : \n"));
     printf("%s", buf);
     // 여기서 uri 입력받음
     sscanf(buf, "%s %s %s", method, uri, version);
@@ -123,7 +136,8 @@ void doit(int fd)
     }
 
     // GET이면 이어서 Request Headers 이어서 읽기
-    read_requesthdrs(&rio);
+    read_requesthdrs(&rio, echofd);
+    Close(echofd);
 
     // head면 1 return
     is_head = !strcasecmp(method, "HEAD");
@@ -198,19 +212,22 @@ void clienterror(int fd, char *cause, char *errnum, char *shortmsg, char *longms
     Rio_writen(fd, body, strlen(body));
 }
 
-void read_requesthdrs(rio_t *rp)
+void read_requesthdrs(rio_t *rp, int echofd)
 {
     char buf[MAXLINE];
 
     // 두번째 header를 버리는 용도
     // 얘는 host의 정보를 출력하지 않음!!!
     Rio_readlineb(rp, buf, MAXLINE);
-
+    Rio_writen(echofd, buf, strlen(buf));
+    // Rio_writen(rp->rio_fd, buf, strlen(buf));
     // 문자열 비교 : 버퍼에 EOF가 올때까지 진행
     while (strcmp(buf, "\r\n"))
     {
         // 읽고 무시한다.
         Rio_readlineb(rp, buf, MAXLINE);
+        Rio_writen(echofd, buf, strlen(buf));
+
         printf("%s", buf);
     }
     return;
@@ -281,10 +298,10 @@ void serve_static(int fd, char *filename, int filesize, int is_head)
     get_filetype(filename, filetype);
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
     sprintf(buf, "%sServer: Tiny Web Server\r\n", buf);
-    // %s해서 계속 하는추가해서 덮어쓰기의 느낌
+    // %s해서 계속 하는추가해서 덮어쓰기의 느낌 : buf에 쌓기
     sprintf(buf, "%sConnection: close\r\n", buf);
     sprintf(buf, "%sContent-length: %d\r\n", buf, filesize);
-    sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype);
+    sprintf(buf, "%sContent-type: %s\r\n\r\n", buf, filetype); // buf에 쌓인 것을 전달하기
     Rio_writen(fd, buf, strlen(buf));
     printf("Response headers:\n");
     printf("%s", buf);
@@ -295,7 +312,12 @@ void serve_static(int fd, char *filename, int filesize, int is_head)
     // Read-Only 영역 : open 시켜놓고 descriptor 얻어오기
 
     srcfd = Open(filename, O_RDONLY, 0);
+
+    /*  Mmap
+
     srcp = Mmap(0, filesize, PROT_READ, MAP_PRIVATE, srcfd, 0);
+    
+    */
     /*
      srcfd : 이 파일의 첫 filesize byte를 
             READ-ONLY 가상 메모리 영역에 mapping
@@ -303,12 +325,22 @@ void serve_static(int fd, char *filename, int filesize, int is_head)
      srcp : READ-ONLY 가상메모리 영역의 시작주소
 
      */
+
+    // malloc
+    // srcp에 filename의 이름을 가진 file을 매핑해야한다.
+    srcp = (char *)malloc(filesize);
+    Rio_readn(srcfd, srcp, filesize);
+
     Close(srcfd);
 
     // 이제 srcp의 filesize만큼은 mapping 되어 있으니 fd에 복사한다.
     Rio_writen(fd, srcp, filesize);
-    // 매핑된 가상메모리 주소 반환
+
+    // free for malloca memory
+    free(srcp);
+    /* Mmap : 매핑된 가상메모리 주소 반환
     Munmap(srcp, filesize);
+    */
 }
 
 /* Tiny Web Server에서 filetype은 5개 중 1개다.*/
